@@ -20,6 +20,7 @@
     --amarillo: #b8681e;
     --amarillo-bg: rgba(184,104,30,0.08);
     --normal-bg: rgba(0,0,0,0.015);
+    --programado-bg: rgba(0, 100, 200, 0.06);
     --shadow: 0 1px 3px rgba(0,0,0,0.06);
   }
   *{box-sizing:border-box;}
@@ -91,6 +92,24 @@
   .stat.amarillo .n{color:var(--amarillo);}
   .stat.normal .n{color:var(--accent);}
 
+  .section-title {
+    font-size:18px;
+    font-weight:600;
+    margin:28px 0 14px 0;
+    color:var(--text);
+    display:flex;
+    align-items:center;
+    gap:10px;
+  }
+  .section-title .badge-count {
+    font-size:13px;
+    font-weight:500;
+    color:var(--text-dim);
+    background:var(--panel-2);
+    padding:2px 12px;
+    border-radius:20px;
+  }
+
   table{width:100%; border-collapse:collapse; font-size:13px; background:var(--panel); border-radius:6px; overflow:hidden; box-shadow:var(--shadow);}
   thead th{
     text-align:left; font-size:11.5px; color:var(--text-dim);
@@ -102,6 +121,7 @@
   tbody tr.rojo{background:var(--rojo-bg); box-shadow: inset 3px 0 0 var(--rojo);}
   tbody tr.amarillo{background:var(--amarillo-bg); box-shadow: inset 3px 0 0 var(--amarillo);}
   tbody tr.normal{box-shadow: inset 3px 0 0 transparent;}
+  tbody tr.programado{background:var(--programado-bg);}
   tbody tr.rojo .tecnico{color:var(--rojo);}
   tbody tr.amarillo .tecnico{color:var(--amarillo);}
   .tecnico{font-weight:600;}
@@ -113,12 +133,24 @@
   }
   .badge.EN-CAMINO{background:rgba(15,157,118,0.12); color:var(--accent);}
   .badge.EN-PROCESO{background:rgba(100,70,200,0.10); color:#5b3eb3;}
+  .badge.PROGRAMADO{background:rgba(0,100,200,0.12); color:#0055aa;}
   .detalle{line-height:1.45;}
   .detalle .estado{font-weight:700;}
   .detalle .estado.rojo{color:var(--rojo);}
   .detalle .estado.amarillo{color:var(--amarillo);}
   .detalle .estado.normal{color:var(--accent);}
+  .detalle .estado.programado{color:#0055aa;}
   .tiempo{font-family:'JetBrains Mono',monospace; white-space:nowrap;}
+
+  .grupo-tramo {
+    background:var(--panel-2);
+    font-weight:600;
+    font-size:12px;
+    text-transform:uppercase;
+    color:var(--text-dim);
+    letter-spacing:0.5px;
+  }
+  .grupo-tramo td{padding:6px 12px; border-bottom:1px solid var(--line);}
 
   footer{
     padding:18px 28px 30px; color:var(--text-dim); font-size:12px; border-top:1px solid var(--line);
@@ -150,6 +182,7 @@
 </header>
 
 <main>
+  <!-- BLOQUE 1: EN CAMINO y EN PROCESO -->
   <div id="stats" class="stats" style="display:none">
     <div class="stat rojo"><div class="n" id="stAlertado">0</div><div class="l">Alertado (excede el límite)</div></div>
     <div class="stat amarillo"><div class="n" id="stProximo">0</div><div class="l">Próximo a alertarse</div></div>
@@ -160,9 +193,14 @@
   <div id="emptyState" class="empty">
     <strong>Sube el CSV exportado de AppSheet</strong>
     Encabezados esperados: Estado, Cuadrilla, Tramo_Atencio, valida_cod_pedido, dni_cliente, H_Progra, H_Inicio, H_Proceso, H_Cierre.<br>
-    La tabla se recalcula sola cada 30 segundos, igual que la macro.
+    La tabla se recalcula sola cada 5 segundos.
   </div>
 
+  <!-- Tabla de EN CAMINO / EN PROCESO -->
+  <div class="section-title" id="titleActivas" style="display:none">
+    🟢 En Camino / En Proceso
+    <span class="badge-count" id="countActivas">0</span>
+  </div>
   <table id="tabla" style="display:none">
     <thead>
       <tr>
@@ -178,19 +216,41 @@
     </thead>
     <tbody id="tbody"></tbody>
   </table>
+
+  <!-- BLOQUE 2: PROGRAMADOS -->
+  <div class="section-title" id="titleProgramados" style="display:none">
+    📋 Programados
+    <span class="badge-count" id="countProgramados">0</span>
+  </div>
+  <table id="tablaProgramados" style="display:none">
+    <thead>
+      <tr>
+        <th>Técnico</th>
+        <th>Código</th>
+        <th>DNI</th>
+        <th>Estado</th>
+        <th>Tramo</th>
+        <th>Hora usada</th>
+        <th>Transcurrido</th>
+        <th>Detalle</th>
+      </tr>
+    </thead>
+    <tbody id="tbodyProgramados"></tbody>
+  </table>
 </main>
 
 <footer>
   Umbrales: EN CAMINO → próximo a los 50 min, alertado a los 60 min. EN PROCESO → próximo a los 60 min, alertado a los 120 min.
-  Se ignoran filas con H_Cierre lleno (ya cerradas) y estados distintos de EN CAMINO / EN PROCESO.
+  Se ignoran filas con H_Cierre lleno (ya cerradas) y estados distintos de EN CAMINO / EN PROCESO / PROGRAMADO.
 </footer>
 
 <script>
 // =====================================================
 // Estado global
 // =====================================================
-let registros = [];      // registros activos ya calculados
-let alertadosPrevios = new Set(); // para detectar nuevas alertas (código de orden)
+let registros = [];      // registros activos (EN CAMINO / EN PROCESO)
+let programados = [];    // registros PROGRAMADO
+let alertadosPrevios = new Set();
 
 const HEADERS_MAP = {
   estado: ["estado"],
@@ -215,10 +275,10 @@ setInterval(tickClock, 1000);
 tickClock();
 
 // =====================================================
-// Parser CSV (soporta ; o , como delimitador, campos con comillas)
+// Parser CSV
 // =====================================================
 function parseCSV(text){
-  text = text.replace(/^\uFEFF/, ''); // quitar BOM
+  text = text.replace(/^\uFEFF/, '');
   const firstLine = text.split(/\r?\n/, 1)[0];
   const delim = firstLine.split(';').length > firstLine.split(',').length ? ';' : ',';
 
@@ -259,7 +319,7 @@ function parseCSV(text){
 }
 
 // =====================================================
-// Parseo de fecha peruana: d/m/yyyy h:mm:ss  o  d/m/yyyy
+// Parseo de fecha peruana
 // =====================================================
 function parseFechaPeru(str){
   if (!str) return null;
@@ -280,43 +340,73 @@ function normaliza(s){
 }
 
 // =====================================================
-// Construir registros activos a partir del CSV parseado
+// Construir registros activos y programados
 // =====================================================
 function construirRegistros(filas){
   const activos = [];
+  const prog = [];
+
   filas.forEach(f => {
     const estado = normaliza(f.estado);
-    if (estado !== 'EN CAMINO' && estado !== 'EN PROCESO') return;
-    if (f.h_cierre && f.h_cierre.trim() !== '') return; // ya cerrada
+    const hCierre = f.h_cierre && f.h_cierre.trim() !== '';
+
+    // Saltamos si está cerrada
+    if (hCierre) return;
 
     const hInicio = parseFechaPeru(f.h_inicio);
     const hProceso = parseFechaPeru(f.h_proceso);
+    const hProgra = parseFechaPeru(f.h_progra);
 
     let fechaUsar = null;
-    if (estado === 'EN CAMINO'){
-      if (hInicio && hProceso) fechaUsar = hProceso >= hInicio ? hProceso : hInicio;
-      else fechaUsar = hProceso || hInicio;
-    } else {
-      fechaUsar = hProceso || hInicio;
-    }
-    if (!fechaUsar) return;
+    let horaUsadaTexto = '';
 
-    activos.push({
-      tecnico: f.tecnico || '(sin técnico)',
-      codigo: f.codigo || '',
-      dni: f.dni || '',
-      estado: estado,
-      tramo: f.tramo || '',
-      horaProgra: f.h_progra || '',
-      fechaUsar: fechaUsar,
-      horaUsadaTexto: fechaUsar.toLocaleString('es-PE', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false})
-    });
+    if (estado === 'EN CAMINO' || estado === 'EN PROCESO') {
+      if (estado === 'EN CAMINO'){
+        if (hInicio && hProceso) fechaUsar = hProceso >= hInicio ? hProceso : hInicio;
+        else fechaUsar = hProceso || hInicio;
+      } else {
+        fechaUsar = hProceso || hInicio;
+      }
+      if (!fechaUsar) return;
+      horaUsadaTexto = fechaUsar.toLocaleString('es-PE', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false});
+
+      activos.push({
+        tecnico: f.tecnico || '(sin técnico)',
+        codigo: f.codigo || '',
+        dni: f.dni || '',
+        estado: estado,
+        tramo: f.tramo || '',
+        horaProgra: f.h_progra || '',
+        fechaUsar: fechaUsar,
+        horaUsadaTexto: horaUsadaTexto
+      });
+    }
+
+    // PROGRAMADO
+    if (estado === 'PROGRAMADO') {
+      // Para programados usamos H_Progra como referencia
+      const fechaRef = hProgra || hInicio || hProceso;
+      if (!fechaRef) return;
+      horaUsadaTexto = fechaRef.toLocaleString('es-PE', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false});
+
+      prog.push({
+        tecnico: f.tecnico || '(sin técnico)',
+        codigo: f.codigo || '',
+        dni: f.dni || '',
+        estado: 'PROGRAMADO',
+        tramo: f.tramo || '',
+        horaProgra: f.h_progra || '',
+        fechaUsar: fechaRef,
+        horaUsadaTexto: horaUsadaTexto
+      });
+    }
   });
-  return activos;
+
+  return { activos, programados: prog };
 }
 
 // =====================================================
-// Calcular delta / clasificación de cada registro (se re-ejecuta cada 5s)
+// Calcular delta para activos
 // =====================================================
 function formatoHM(minutos){
   minutos = Math.max(0, Math.round(minutos));
@@ -350,15 +440,27 @@ function calcularAlertas(){
       r.detalleExtra = `Faltan: ${formatoHM(umbralAmarillo - deltaMin)} para pasar a próximo`;
     }
   });
+
+  // Programados: calcular tiempo transcurrido desde H_Progra
+  const ahora2 = new Date();
+  programados.forEach(r => {
+    const deltaMin = (ahora2 - r.fechaUsar) / 60000;
+    r.deltaMin = deltaMin;
+    r.transcurridoTexto = formatoHM(deltaMin);
+    r.nivel = 'programado';
+    r.prioridad = 4;
+    r.detalleTitulo = 'Programado';
+    r.detalleExtra = `Esperando inicio (${formatoHM(deltaMin)} transcurridos)`;
+  });
 }
 
 // =====================================================
-// Render de tabla + resumen + alertas nuevas
+// Render
 // =====================================================
 function render(){
+  // ---- BLOQUE 1: EN CAMINO / EN PROCESO ----
   const ordenados = [...registros].sort((a,b) => a.prioridad - b.prioridad || a.fechaUsar - b.fechaUsar);
 
-  // Duplicados de técnico entre alertados/próximos
   const conteoTecnico = {};
   ordenados.forEach(r => { if (r.nivel !== 'normal'){ conteoTecnico[r.tecnico] = (conteoTecnico[r.tecnico]||0)+1; } });
 
@@ -386,6 +488,60 @@ function render(){
   document.getElementById('stNormal').textContent = ordenados.filter(r=>r.nivel==='normal').length;
   document.getElementById('stTotal').textContent = ordenados.length;
 
+  // Mostrar/ocultar elementos del bloque 1
+  const hayActivas = ordenados.length > 0;
+  document.getElementById('stats').style.display = hayActivas ? 'grid' : 'none';
+  document.getElementById('tabla').style.display = hayActivas ? 'table' : 'none';
+  document.getElementById('titleActivas').style.display = hayActivas ? 'flex' : 'none';
+  document.getElementById('countActivas').textContent = ordenados.length;
+
+  // ---- BLOQUE 2: PROGRAMADOS ----
+  // Agrupar por TRAMO y ordenar por TÉCNICO dentro de cada grupo
+  const grupos = {};
+  programados.forEach(r => {
+    const tramo = r.tramo || 'SIN TRAMO';
+    if (!grupos[tramo]) grupos[tramo] = [];
+    grupos[tramo].push(r);
+  });
+
+  // Ordenar técnicos dentro de cada grupo
+  Object.keys(grupos).forEach(tramo => {
+    grupos[tramo].sort((a, b) => a.tecnico.localeCompare(b.tecnico));
+  });
+
+  // Ordenar grupos por tramo
+  const tramosOrdenados = Object.keys(grupos).sort((a, b) => a.localeCompare(b));
+
+  const tbodyProg = document.getElementById('tbodyProgramados');
+  let htmlProg = '';
+  tramosOrdenados.forEach(tramo => {
+    const items = grupos[tramo];
+    // Fila de grupo
+    htmlProg += `<tr class="grupo-tramo"><td colspan="8">📍 ${escapeHtml(tramo)} (${items.length})</td></tr>`;
+    items.forEach(r => {
+      htmlProg += `
+        <tr class="programado">
+          <td class="tecnico">${escapeHtml(r.tecnico)}</td>
+          <td class="mono">${escapeHtml(r.codigo)}</td>
+          <td class="mono">${escapeHtml(r.dni)}</td>
+          <td><span class="badge PROGRAMADO">PROGRAMADO</span></td>
+          <td>${escapeHtml(r.tramo)}</td>
+          <td class="mono">${r.horaUsadaTexto}</td>
+          <td class="tiempo">${r.transcurridoTexto}</td>
+          <td class="detalle">
+            <span class="estado programado">Programado</span><br>
+            ${r.detalleExtra}
+          </td>
+        </tr>`;
+    });
+  });
+  tbodyProg.innerHTML = htmlProg;
+
+  const hayProgramados = programados.length > 0;
+  document.getElementById('tablaProgramados').style.display = hayProgramados ? 'table' : 'none';
+  document.getElementById('titleProgramados').style.display = hayProgramados ? 'flex' : 'none';
+  document.getElementById('countProgramados').textContent = programados.length;
+
   detectarNuevasAlertas(ordenados);
 }
 
@@ -394,7 +550,7 @@ function escapeHtml(s){
 }
 
 // =====================================================
-// Alertas sonoras / notificación cuando algo nuevo pasa a "rojo"
+// Alertas sonoras / notificaciones
 // =====================================================
 function beep(){
   try{
@@ -426,10 +582,8 @@ function detectarNuevasAlertas(ordenados){
 // =====================================================
 // Eventos UI
 // =====================================================
-// Configurar notificaciones - corregido
 const chkNotif = document.getElementById('chkNotif');
 
-// Verificar estado inicial del permiso
 if (Notification && Notification.permission === 'granted') {
   chkNotif.checked = true;
 }
@@ -449,9 +603,7 @@ chkNotif.addEventListener('change', function(e) {
       this.checked = false;
       alert('Las notificaciones están bloqueadas en tu navegador. Por favor, habilítalas desde la configuración de permisos.');
     }
-    // Si ya está 'granted', se mantiene checked
   }
-  // Si se desmarca, no hacemos nada especial
 });
 
 document.getElementById('fileInput').addEventListener('change', e => {
@@ -461,13 +613,13 @@ document.getElementById('fileInput').addEventListener('change', e => {
   const reader = new FileReader();
   reader.onload = ev => {
     const filas = parseCSV(ev.target.result);
-    registros = construirRegistros(filas);
+    const resultado = construirRegistros(filas);
+    registros = resultado.activos;
+    programados = resultado.programados;
     alertadosPrevios = new Set();
     calcularAlertas();
     render();
     document.getElementById('emptyState').style.display = 'none';
-    document.getElementById('stats').style.display = 'grid';
-    document.getElementById('tabla').style.display = 'table';
   };
   reader.readAsText(file, 'UTF-8');
 });
@@ -476,7 +628,7 @@ document.getElementById('fileInput').addEventListener('change', e => {
 // Actualización dinámica cada 5 segundos
 // =====================================================
 setInterval(() => {
-  if (registros.length) {
+  if (registros.length || programados.length) {
     calcularAlertas();
     render();
   }
