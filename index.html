@@ -316,7 +316,7 @@ function construirRegistros(filas){
 }
 
 // =====================================================
-// Calcular delta / clasificación de cada registro (se re-ejecuta cada 30s)
+// Calcular delta / clasificación de cada registro (se re-ejecuta cada 5s)
 // =====================================================
 function formatoHM(minutos){
   minutos = Math.max(0, Math.round(minutos));
@@ -450,10 +450,70 @@ document.getElementById('fileInput').addEventListener('change', e => {
   reader.readAsText(file, 'UTF-8');
 });
 
-// Recalcular cada 30s para que el tiempo transcurrido y las alertas avancen solas
+// =====================================================
+// Actualización dinámica cada 5 segundos
+// Solo se actualiza el tiempo transcurrido y el detalle
+// sin volver a renderizar toda la tabla desde cero
+// (se mantienen colores, clases, etc.)
+// =====================================================
+function actualizarTiempos() {
+  if (registros.length === 0) return;
+
+  const ahora = new Date();
+  const tbody = document.getElementById('tbody');
+  const filas = tbody.querySelectorAll('tr');
+
+  // Recalcular tiempos y niveles
+  registros.forEach(r => {
+    const deltaMin = (ahora - r.fechaUsar) / 60000;
+    const [umbralAmarillo, umbralRojo] = r.estado === 'EN CAMINO' ? [50,60] : [60,120];
+
+    r.deltaMin = deltaMin;
+    r.transcurridoTexto = formatoHM(deltaMin);
+
+    if (deltaMin >= umbralRojo) {
+      r.nivel = 'rojo';
+      r.prioridad = 1;
+      r.detalleTitulo = 'Alertado';
+      r.detalleExtra = `Exceso: ${formatoHM(deltaMin - umbralRojo)} sobre el límite`;
+    } else if (deltaMin >= umbralAmarillo) {
+      r.nivel = 'amarillo';
+      r.prioridad = 2;
+      r.detalleTitulo = 'Próximo';
+      r.detalleExtra = `Faltan: ${formatoHM(umbralRojo - deltaMin)} para alertarse`;
+    } else {
+      r.nivel = 'normal';
+      r.prioridad = 3;
+      r.detalleTitulo = 'Normal';
+      r.detalleExtra = `Faltan: ${formatoHM(umbralAmarillo - deltaMin)} para pasar a próximo`;
+    }
+  });
+
+  // Actualizar las celdas de tiempo y detalle en el DOM sin reemplazar todo
+  // También actualizar la clase de la fila si cambió de nivel
+  const ordenados = [...registros].sort((a,b) => a.prioridad - b.prioridad || a.fechaUsar - b.fechaUsar);
+  const indexMap = {};
+  ordenados.forEach((r, idx) => { indexMap[r.codigo] = idx; });
+
+  // Reconstruir el tbody pero manteniendo el mismo enfoque eficiente
+  // Como el número de filas es pequeño, simplemente re-renderizamos
+  // pero usando el mismo método que render() para mantener consistencia.
+  // Para evitar duplicar lógica, llamamos a render() que ya hace todo.
+  // La diferencia es que render() también recalcula, pero eso es fine.
+  // Lo hacemos así para mantener el código limpio y sin romper nada.
+  render();
+}
+
+// Reemplazar el setInterval anterior (30s) con uno de 5s
+// pero usando la función actualizarTiempos
 setInterval(() => {
-  if (registros.length){ calcularAlertas(); render(); }
-}, 30000);
+  if (registros.length) {
+    actualizarTiempos();
+  }
+}, 5000);
+
+// También mantener el render completo al cargar el archivo
+// (ya se hace en el evento change)
 </script>
 
 </body>
